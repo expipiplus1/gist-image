@@ -5,6 +5,7 @@ module Main
   ( main
   ) where
 
+import           Data.Foldable
 import           Data.Semigroup
 import           Data.String
 import           Data.Text
@@ -18,16 +19,13 @@ import           System.IO.Temp
 import           Turtle             (cp, procStrict, procs)
 
 main :: IO ()
-main =
-  getArgs >>= \case
-    [file] -> gistFile file
-    _ -> do
-      T.hPutStrLn stderr "Usage: gist-image FILE"
-      exitFailure
+main = do
+  files <- getArgs
+  gistFiles files
 
-gistFile :: FilePath -> IO ()
-gistFile file = withSystemTempDirectory "gist" $ \tmpDir -> do
-  let tmpName = tmpDir </> takeFileName file
+gistFiles :: [FilePath] -> IO ()
+gistFiles files = withSystemTempDirectory "gist" $ \tmpDir -> do
+  let tmpName = tmpDir </> "dummy"
   T.writeFile tmpName "_"
   procStrict "gist" ["-p", fromString tmpName] mempty >>= \case
     (ExitFailure _, out) -> do
@@ -40,14 +38,12 @@ gistFile file = withSystemTempDirectory "gist" $ \tmpDir -> do
             pl <- stripPrefix "https://" gitRepoHTTPS
             pure ("git@" <> replace "/" ":" pl <> ".git")
           gitDir = tmpDir </> "git"
-      procStrict "git" ["clone", gitRepoSSH, fromString gitDir] mempty >>= \case
-        (ExitFailure _, _) -> do
-          T.hPutStrLn stderr "git clone failed"
-          exitFailure
-        (ExitSuccess, _) -> do
-          cp (fromString file) (fromString (gitDir </> takeFileName file))
-          withCurrentDirectory gitDir $ do
-            procs "git" ["add", fromString (takeFileName file)] mempty
-            procs "git" ["commit", "--amend", "--no-edit", "--allow-empty-message"] mempty
-            procs "git" ["push", "--force"] mempty
-            T.putStrLn out
+      procs "git" ["clone", gitRepoSSH, fromString gitDir] mempty
+      let cpToGit file = cp (fromString file) (fromString (gitDir </> takeFileName file))
+      traverse_ cpToGit files
+      withCurrentDirectory gitDir $ do
+        procs "git" ["rm", fromString (takeFileName tmpName)] mempty
+        procs "git" ("add" : ((fromString . takeFileName) <$> files)) mempty
+        procs "git" ["commit", "--amend", "--no-edit", "--allow-empty-message"] mempty
+        procs "git" ["push", "--force"] mempty
+        T.putStrLn out
